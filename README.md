@@ -17,6 +17,7 @@ What you'll find
 - `emo_v5.py` — Edge-TTS integration with WAV save/read/play flow (multi-language support).
 - `emo_v6.py` — Continuous synchronized actions with cartoon voices and multi-modal expressions.
 - `emo_v7.py` — ASR → LLM → TTS demo (see EMO_V7_README.md)
+- `emo_v8_openclaw.py` — OpenClaw integration (replaces Ollama with OpenClaw API)
 
 ## Installation prerequisites (Linux / Debian-family)
 1. System packages
@@ -79,6 +80,7 @@ python emo_v4.py --test-tts
 
 emo_v7 (ASR → LLM → TTS)
 ---------------------------------
+- `emo_v8_openclaw.py` integrates with OpenClaw API instead of Ollama, using OpenAI-compatible endpoints with proper authentication. See [EMO_V8_OPENCLAW.md](EMO_V8_OPENCLAW.md) for usage, requirements, and setup instructions.
 - `emo_v7.py` adds a microphone-first pipeline using `faster-whisper` (CPU) for ASR, then forwards the transcription to Ollama and uses the existing emotion controller + Edge-TTS for speech and actions.
 - See [EMO_V7_README.md](EMO_V7_README.md) for usage, requirements, and notes about model choices and VAD improvements.
 

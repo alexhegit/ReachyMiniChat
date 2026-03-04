@@ -6,19 +6,19 @@ This document consolidates per-version summaries and a full version-comparison t
 
 ## Full Version Comparison Table
 
-| Feature | emo_v1 | emo_v2 | emo_v3 | emo_v4 | emo_v5 | emo_v6 | emo_v7 |
-|---|---:|---:|---:|---:|---:|---:|---:|
-| Action Source | custom | recorded moves | recorded moves | recorded moves | recorded moves | recorded moves | recorded moves |
-| Emotion Types | 4 basic | 4 enhanced | 4 enhanced | 4 enhanced | 4 enhanced | 4 enhanced | 4 enhanced |
-| Action Timing | after text | after text | during text | during speech | during speech | continuous speech | ASR → during speech |
-| TTS Engine | none | none | none | multi-backend (local) | Edge-TTS (cloud) | Edge-TTS cartoon voices | Edge-TTS cartoon voices |
-| Lip-sync | no | no | no | generic | antenna/eye precise | multi-modal synchronized | multi-modal synchronized |
-| Voice Quality | N/A | N/A | N/A | local | neural cloud | cute cartoon + parameters | cute cartoon + parameters |
-| Threading | no | no | yes | yes | yes | advanced multi-thread | advanced multi-thread |
-| Emoji Support | no | yes | yes | yes | yes | yes | yes |
-| Eye Blinking | no | no | no | no | no | synchronized | synchronized |
-| Body Yaw | no | no | no | no | no | synchronized | synchronized |
-| Action Variety | 1 per emotion | 1 per emotion | 1 per emotion | 1 per emotion | 1 per emotion | 4-5 sequences per emotion | 4-5 sequences per emotion |
+| Feature | emo_v1 | emo_v2 | emo_v3 | emo_v4 | emo_v5 | emo_v6 | emo_v7 | emo_v8_openclaw |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| Action Source | custom | recorded moves | recorded moves | recorded moves | recorded moves | recorded moves | recorded moves | recorded moves |
+| Emotion Types | 4 basic | 4 enhanced | 4 enhanced | 4 enhanced | 4 enhanced | 4 enhanced | 4 enhanced | 4 enhanced |
+| Action Timing | after text | after text | during text | during speech | during speech | continuous speech | ASR → during speech | ASR → during speech |
+| TTS Engine | none | none | none | multi-backend (local) | Edge-TTS (cloud) | Edge-TTS cartoon voices | Edge-TTS cartoon voices | Edge-TTS cartoon voices |
+| Lip-sync | no | no | no | generic | antenna/eye precise | multi-modal synchronized | multi-modal synchronized | multi-modal synchronized |
+| Voice Quality | N/A | N/A | N/A | local | neural cloud | cute cartoon + parameters | cute cartoon + parameters | cute cartoon + parameters |
+| Threading | no | no | yes | yes | yes | advanced multi-thread | advanced multi-thread | advanced multi-thread |
+| Emoji Support | no | yes | yes | yes | yes | yes | yes | yes |
+| Eye Blinking | no | no | no | no | no | synchronized | synchronized | synchronized |
+| Body Yaw | no | no | no | no | no | synchronized | synchronized | synchronized |
+| Action Variety | 1 per emotion | 1 per emotion | 1 per emotion | 1 per emotion | 1 per emotion | 4-5 sequences per emotion | 4-5 sequences per emotion | 4-5 sequences per emotion |
 
 ---
 
@@ -177,3 +177,44 @@ Notes
 - `python emo_v6.py --test-actions` validates v6 synchronized eye blinking + body yaw + head + antennas (integrated testing).
 - `python emo_v6.py --test-tts` validates Edge-TTS with emotion analysis and cartoon voices.
 - `python utils/test_edge_tts_voices.py` discovers and tests cute voices from Edge-TTS library.
+
+---
+
+## emo_v8_openclaw — OpenClaw API Integration
+
+Summary
+- Purpose: Replace Ollama with OpenClaw API integration using OpenAI-compatible endpoints.
+- Key features: Proper authentication with Bearer token, OpenClaw-specific headers, seamless integration with existing emotion controller and ASR/TTS capabilities.
+
+Code snapshot
+```python
+# OpenClaw API request with proper authentication
+headers = {
+    "Authorization": f"Bearer {self.openclaw_token}",
+    "Content-Type": "application/json",
+    "x-openclaw-agent-id": "main"
+}
+payload = {
+    "model": "openclaw",  # OpenClaw-specific model name
+    "messages": [...],
+    "stream": True
+}
+```
+
+Requirements
+- Valid OpenClaw API token
+- OpenClaw Gateway running with HTTP API enabled
+
+Quick test
+```bash
+# Text chat mode with OpenClaw
+python emo_v8_openclaw.py --token "your_token_here"
+
+# ASR voice mode with OpenClaw
+python emo_v8_openclaw.py --token "your_token_here" --asr
+```
+
+Notes
+- Uses "openclaw" as the model name instead of specific LLM identifiers
+- Requires the x-openclaw-agent-id header for proper routing
+- Maintains all existing features from emo_v7 (ASR, TTS, emotion analysis)
