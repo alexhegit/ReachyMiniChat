@@ -24,7 +24,8 @@ What you'll find
 
 ```bash
 sudo apt update
-sudo apt install -y python3 python3-venv python3-pip espeak ffmpeg libsndfile1 portaudio19-dev
+sudo apt install -y python3 python3-dev python3-venv python3-pip build-essential \
+                    espeak ffmpeg libsndfile1 portaudio19-dev libcairo2-dev 
 ```
 
 **Notes:**
