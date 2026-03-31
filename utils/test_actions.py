@@ -23,7 +23,7 @@ def play_all_moves_from_library(mini, library_name: str, initial_goto_duration: 
 
 if __name__ == '__main__':
     # Simple test runner: plays dances and emotions libraries
-    with ReachyMini() as mini:
+    with ReachyMini(media_backend="no_media") as mini:
         # Test dances (limit to first 10 for quick runs)
         play_all_moves_from_library(mini, "pollen-robotics/reachy-mini-dances-library", initial_goto_duration=1.0, limit=10)
 
