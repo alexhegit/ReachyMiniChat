@@ -7,40 +7,28 @@
 ![Demo](./assets/ReachyMiniChat.png)
 
 ## Short summary
-- This repository contains demo apps and controllers for the Reachy Mini simulator and small robot, focused on emotion-driven and dance actions triggered from language model outputs (Ollama). It includes several experimental versions (`emo_v1` → `emo_v8`) that explore recorded-move playback, streaming-triggered motions, and TTS integration.
+- This repository contains demo apps and controllers for the Reachy Mini simulator and small robot, focused on emotion-driven and dance actions triggered from language model outputs (Ollama). It includes multiple experimental versions of increasing capability (`emo_v1` → `emo_v8`) that explore recorded-move playback, streaming-triggered motions, and TTS integration.
 
-What you'll find
-- `emo_v1.py` — Baseline high-intensity emotion controller and examples.
-- `emo_v2.py` — RecordedMoves categorization and selection.
-- `emo_v3.py` — Streaming LM responses triggering actions early.
-- `emo_v4.py` — Offline-focused TTS (eSpeak) with lip-sync hooks.
-- `emo_v5.py` — Edge-TTS integration with WAV save/read/play flow (multi-language support).
-- `emo_v6.py` — Continuous synchronized actions with cartoon voices and multi-modal expressions.
-- `emo_v7.py` — ASR → LLM → TTS demo (see EMO_V7_README.md)
-- `emo_v8.py` — Offline Piper-TTS version (ASR/text chat + Ollama + Piper)
+For a quick summary of each emo_v*.py iteration:
+- `emo_v1.py` — Baseline text chat, high-amplitude emotion controller, and examples.
+- `emo_v2.py` — Swaps hardcoded movements for the RecordedMoves library (richer, more natural motion vocabulary).
+- `emo_v3.py` — Streams LM responses which triggers robot actions earlier instead of waiting for full response.
+- `emo_v4.py` — Adds an offline-focused TTS (eSpeak) voice output with basic lip-sync hooks.
+- `emo_v5.py` — Upgrades TTS to Edge-TTS integration with WAV save/read/play flow (multi-language support).
+- `emo_v6.py` — Continuous synchronized actions throughout speech — with cartoon voices and multi-modal expressions.
+- `emo_v7.py` — Adds voice intput — ASR → LLM → TTS demo (see EMO_V7_README.md).
+- `emo_v8.py` — Uses offline Piper-TTS version (ASR/text chat + Ollama + Piper).
 
 ## Installation prerequisites (Linux / Debian-family)
 
-This project is developed on an AMD Ryzen™ AI Max+ 395 running Ubuntu 24.04. I recommend this hardware for deploying the application, as it serves as an excellent companion to the Reachy Mini Desktop Robot. The integrated GPU and CPU provide the necessary performance to run the full pipeline 100% offline.
+This project is developed on an AMD Ryzen™ AI Max+ 395 running Ubuntu 24.04. We recommend this hardware for deploying the application, as it serves as an excellent companion to the Reachy Mini Desktop Robot. The integrated GPU and CPU provide the necessary performance to run the full pipeline 100% offline.
 
 So you may follow the [AMD ROCm Documentation](
 https://rocm.docs.amd.com/projects/radeon-ryzen/en/latest/docs/install/installryz/native_linux/install-ryzen.html) to install Ryzen Software for Linux with ROCm.
 
-Then go to setup the environment for this application.
+Then go to setup the environment for this application. (*Note: the required system packages should already be installed for you; if you would like to view them, you can do so [here](./setup_deps.sh)*)
 
-1. System packages
-
-```bash
-sudo apt update
-sudo apt install -y python3 python3-venv python3-pip espeak ffmpeg libsndfile1 portaudio19-dev
-```
-
-**Notes:**
-- `espeak` (eSpeak) is required for the offline TTS flow used by `emo_v4.py`.
-- `libsndfile1` and `portaudio` are required for `soundfile` and `sounddevice` (used when playing WAVs).
-- `ffmpeg` is optional but useful if you need to convert audio formats or debug audio files.
-
-2. Python environment
+1. Python environment
 
 ```bash
 python3 -m venv venv
@@ -49,29 +37,34 @@ pip install --upgrade pip
 pip install -r requirements.txt
 ```
 
-3. Ollama / Reachy Mini SDK
+2. Reachy Mini SDK
 
-This repo uses Ollama and Reachy Mini SDK for LLM and action responses in demos. Please follow those tools' own install instructions.
+This repo uses the Reachy Mini SDK to program, control, and simulate robot actions in the demo. Please follow the tool's own installation instructions.
 
 - Install reachy-mini SDK with Mujoco support:
-
 ```bash
 pip install "reachy-mini[mujoco]"
 ```
 
-- Install Ollama from https://ollama.com/download. Then install it and pull Qwen3:0.6B which is the LLM we used in this repo.
+3. Ollama
+
+Ollama is an open-source tool that we'll use to run our models locally. (*Note: Ollama should already be installed for you, but here is the download link for your reference: https://ollama.com/download*)
+
+- Pull the Qwen3:0.6B model which is the LLM we used in this repo.
+```bash
+ollama pull qwen3:0.6b
+ollama serve
+```
 
 ## Run it
 
 1. Start the Reachy Mini simulation in terminal 1:
-
+- Use `export PYGLFW_LIBRARY_VARIANT=x11` if the GUI launch fails on Wayland, which is the default backend of Ubuntu 24.04+.
 ```bash
 reachy-mini-daemon --sim
 ```
 
-Use `export PYGLFW_LIBRARY_VARIANT=x11` if the GUI launch fails on Wayland, which is the default backend of Ubuntu 24.04+.
-
-2. Quick test commands (terminal 2)
+2. Quick test commands in terminal 2:
 
 ```bash
 # Run the action tests (plays recorded moves + emotions)
@@ -107,26 +100,29 @@ python emo_v7.py --asr --gentle
 ```bash
 python emo_v8.py --model qwen3:0.6b --piper-model models/zh_CN-huayan-medium.onnx --gentle
 ```
+To download the models from the Hugging Face hub:
+- `csukuangfj/vits-piper-zh_CN-huayan-medium`
+- `csukuangfj/vits-piper-en_US-lessac-medium`
 
-Piper voice model download
-- Download `.onnx` and matching `.onnx.json` voice files from:
-  - Piper release page: `https://github.com/rhasspy/piper/releases/tag/v0.0.2`
-  - Voice files repo: `https://huggingface.co/rhasspy/piper-voices`
-- Place files under `models/` (or any path you pass to `--piper-model`).
+If you'd like to download and experiment with more piper voice models, you can find further `.onnx` and matching `.onnx.json` voice files from:
+- Piper release page: `https://github.com/rhasspy/piper/releases/tag/v0.0.2`
+- Voice files repo: `https://huggingface.co/rhasspy/piper-voices`
 
-Usage examples
+Place your chosen files under `models/` (or any path you pass to `--piper-model`).
+
+Example usage (with a qwen3.5:0.8b model instead):
 ```bash
 # Text chat mode + english (default)
-python emo_v8.py --model qwen3.5:0.8b --piper-model models/en-us-blizzard_lessac-medium.onnx
+python emo_v8.py --model qwen3.5:0.8b --piper-model models/en_US-lessac-medium.onnx
 
 # ASR mode + Chinese 
-python emo_v8.py --asr --model qwen3.5:0.8b --piper-model models/zh_CN-huayan-medium.onnx --gentle
+python emo_v8.py --asr --model qwen3.5:0.8b --piper-model models/zh_CN-huayan-medium.onnx
 
 # ASR + gentle action + Chinese
 python emo_v8.py --piper-model ./models/zh_CN-huayan-medium.onnx --gentle --model qwen3.5:0.8b
 
 # Optional: explicit Piper config/speaker
-python emo_v8.py --piper-model models/en-us-blizzard_lessac-medium.onnx --piper-config models/en-us-blizzard_lessac-medium.onnx.json --speaker 0
+python emo_v8.py --piper-model models/en_US-lessac-medium.onnx --piper-config models/en_US-lessac-medium.onnx.json --speaker 0
 ```
 
 ## Version History
