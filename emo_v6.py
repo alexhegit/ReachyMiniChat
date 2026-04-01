@@ -128,7 +128,6 @@ _EMOTION_CATEGORY_MAP: Dict[str, str] = {
     "oops2":          "neutral",
     "shy1":           "neutral",
     "sleep1":         "neutral",
-    "proud1":         "neutral",
     "surprised1":     "neutral",
     "surprised2":     "neutral",
 }
@@ -516,7 +515,11 @@ class EmotionControllerV6:
                 mv = self.dances_lib.get(move_name)
             except Exception:
                 mv = self.emotions_lib.get(move_name)
-        self.reachy.play_move(mv, initial_goto_duration=initial_goto_duration)
+        self.reachy.play_move(
+            mv,
+            initial_goto_duration=initial_goto_duration,
+            sound=False,
+        )
 
     def _filter_gentle_emotions(self, available_moves):
         """Filter to only gentle emotions if gentle_mode is enabled."""
@@ -1527,9 +1530,10 @@ def main():
         response = input("Also test individual components? (y/n): ").lower().strip()
         if response == 'y':
             app.test_individual_actions()
-
-    else:
+    elif args.chat:
         app.start_chat()
+    else:
+        parser.print_help()
 
 if __name__ == "__main__":
     main()

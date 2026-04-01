@@ -27,6 +27,9 @@ import asyncio
 import argparse
 import threading
 import subprocess
+import select
+import termios
+import tty
 import numpy as np
 import soundfile as sf
 import sounddevice as sd
@@ -62,6 +65,7 @@ class PiperTTSEngine:
         self.config_path = config_path
         self.speaker_id = speaker_id
         self.voice = None
+        self._stop_requested = threading.Event()
         
         try:
             from piper import PiperVoice, PiperConfig
@@ -150,6 +154,8 @@ class PiperTTSEngine:
             return
 
         try:
+            self._stop_requested.clear()
+
             # Create a temporary WAV file
             with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as tmp:
                 tmp_path = tmp.name
@@ -167,7 +173,20 @@ class PiperTTSEngine:
             data, sr = sf.read(tmp_path, dtype='float32')
             if data.size > 0:
                 sd.play(data, samplerate=sr)
-                sd.wait()
+                while True:
+                    if self._stop_requested.is_set():
+                        sd.stop()
+                        break
+
+                    try:
+                        stream = sd.get_stream()
+                    except Exception:
+                        stream = None
+
+                    if stream is None or not stream.active:
+                        break
+
+                    time.sleep(0.05)
             
             # Cleanup
             try:
@@ -182,6 +201,14 @@ class PiperTTSEngine:
         """Async version of speak_with_emotion (runs in thread)."""
         # Piper synthesis is CPU bound, so run in a separate thread
         await asyncio.to_thread(self.speak_with_emotion, text, emotion)
+
+    def stop(self):
+        """Stop any in-progress audio playback."""
+        self._stop_requested.set()
+        try:
+            sd.stop()
+        except Exception:
+            pass
 
 
 class ConversationHistory:
@@ -271,6 +298,12 @@ class EmotionControllerV71(EmotionControllerV6):
             'thoughtful_tilt': self._simple_thoughtful_tilt,
         }
 
+    def interrupt_speech(self):
+        """Stop current TTS playback and wind down animation threads."""
+        self.is_speaking_action = False
+        self.lip_sync.stop_lip_sync()
+        self.tts_engine.stop()
+
 
 class ChatAppWithPiper:
     def __init__(self, 
@@ -307,6 +340,79 @@ class ChatAppWithPiper:
         # Step 2: Conversation history
         self.history = ConversationHistory(max_rounds=history_size)
         self.history.enabled = enable_history
+
+    def _wait_for_ctrl_d(self, stop_event: threading.Event) -> bool:
+        """Watch stdin for Ctrl-D while allowing Ctrl-C to keep its default behavior."""
+        if not sys.stdin.isatty():
+            return False
+
+        fd = sys.stdin.fileno()
+        old_settings = termios.tcgetattr(fd)
+
+        try:
+            tty.setcbreak(fd)
+            while not stop_event.is_set():
+                ready, _, _ = select.select([fd], [], [], 0.1)
+                if not ready:
+                    continue
+
+                char = os.read(fd, 1)
+                if char == b"\x04":
+                    return True
+        finally:
+            termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+
+        return False
+
+    async def _run_speech_with_interrupt(
+        self,
+        response: str,
+        emotion: str,
+        intensity: str,
+        emotion_level: float,
+    ) -> bool:
+        """Run TTS/animation and allow Ctrl-D to skip to the next recording."""
+        if self.controller is None:
+            return False
+
+        speech_task = asyncio.create_task(
+            self.controller.speak_with_expression_parallel(
+                response, emotion, intensity, emotion_level
+            )
+        )
+
+        stop_event = threading.Event()
+        interrupt_task = None
+
+        if self.use_asr and sys.stdin.isatty():
+            interrupt_task = asyncio.create_task(
+                asyncio.to_thread(self._wait_for_ctrl_d, stop_event)
+            )
+
+        try:
+            if interrupt_task is None:
+                await speech_task
+                return False
+
+            done, _ = await asyncio.wait(
+                {speech_task, interrupt_task},
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+
+            if interrupt_task in done and interrupt_task.result():
+                self.controller.interrupt_speech()
+                with suppress(Exception):
+                    await speech_task
+                print("\n⏭️ Speech interrupted. Listening again...")
+                return True
+
+            await speech_task
+            return False
+        finally:
+            stop_event.set()
+            if interrupt_task is not None:
+                with suppress(asyncio.TimeoutError, asyncio.CancelledError):
+                    await asyncio.wait_for(interrupt_task, timeout=0.3)
 
     async def check_ollama_model(self, session: aiohttp.ClientSession) -> bool:
         """Check if the requested model is available in Ollama."""
@@ -510,7 +616,7 @@ class ChatAppWithPiper:
                         print(f"❌ Failed to initialize ASR engine: {e}")
                         return
 
-                    print("\n🎤 VAD ASR + Async mode: press Ctrl-C to stop")
+                    print("\n🎤 VAD ASR + Async mode: Ctrl-D skips speech, Ctrl-C exits")
                     
                     async with aiohttp.ClientSession() as session:
                         # Check model once
@@ -575,10 +681,12 @@ class ChatAppWithPiper:
                                     tts_start = time.time()
                                     
                                     emotion, intensity, emotion_level = self.controller.analyze_emotion(response)
-                                    await self.controller.speak_with_expression_parallel(
+                                    interrupted = await self._run_speech_with_interrupt(
                                         response, emotion, intensity, emotion_level
                                     )
-                                     
+                                    if interrupted:
+                                        continue
+                                      
                                     tts_time = time.time() - tts_start
                                     total_time = asr_time + llm_time + tts_time
                                     
@@ -587,6 +695,8 @@ class ChatAppWithPiper:
                                         print(f"\n  ⏱️  [Timing] ASR: {asr_time:.2f}s, LLM: {llm_time:.2f}s, TTS: {tts_time:.2f}s, Total: {total_time:.2f}s")
 
                             except KeyboardInterrupt:
+                                if self.controller:
+                                    self.controller.interrupt_speech()
                                 print("\n\n👋 Goodbye!")
                                 return
                             except Exception as e:
