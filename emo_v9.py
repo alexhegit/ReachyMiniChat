@@ -33,6 +33,7 @@ import sounddevice as sd
 import aiohttp
 from typing import Optional, Tuple, Dict, List
 from collections import deque
+from contextlib import suppress
 
 # Import from existing modules
 # We need to ensure we can import from current directory
@@ -383,7 +384,10 @@ class ChatAppWithPiper:
                 thinking_response = ""
                 chunk_count = 0
 
-                async for line in response.content:
+                while True:
+                    line = await response.content.readline()
+                    if not line:
+                        break
                     if line:
                         try:
                             decoded = line.decode('utf-8')
@@ -442,37 +446,20 @@ class ChatAppWithPiper:
         """Show robot 'thinking' animation."""
         import math
         start_time = time.time()
-        while time.time() - start_time < duration:
-            angle = math.sin((time.time() - start_time) * 3) * 0.1
-            pose = create_head_pose(roll=angle)
-            reachy.goto_target(head=pose, duration=0.3)
-            await asyncio.sleep(0.1)
-            
-            if hasattr(reachy, 'l_antenna') and hasattr(reachy, 'r_antenna'):
-                reachy.l_antenna.goto_position(angle * 0.5, duration=0.2)
-                reachy.r_antenna.goto_position(-angle * 0.5, duration=0.2)
-            
-            await asyncio.sleep(0.2)
-            
-        reachy.goto_target(head=create_head_pose(), duration=0.5)
-
-    def _speak_and_animate(self, response: str, emotion: str, intensity: str, emotion_level: float):
-        """Helper to run speech and animation in thread (blocking, for asyncio.to_thread)."""
         try:
-            # This runs emo_v6's speak_with_expression_parallel which may block
-            import asyncio
-            # Create a new event loop for this thread
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            try:
-                loop.run_until_complete(
-                    self.controller.speak_with_expression_parallel(response, emotion, intensity, emotion_level)
-                )
-            finally:
-                loop.close()
-        except Exception as e:
-            if self.debug:
-                print(f"[Speech] Error: {e}")
+            while time.time() - start_time < duration:
+                angle = math.sin((time.time() - start_time) * 3) * 0.1
+                pose = create_head_pose(roll=angle)
+                reachy.goto_target(head=pose, duration=0.3)
+                await asyncio.sleep(0.1)
+
+                if hasattr(reachy, 'l_antenna') and hasattr(reachy, 'r_antenna'):
+                    reachy.l_antenna.goto_position(angle * 0.5, duration=0.2)
+                    reachy.r_antenna.goto_position(-angle * 0.5, duration=0.2)
+
+                await asyncio.sleep(0.2)
+        finally:
+            reachy.goto_target(head=create_head_pose(), duration=0.5)
 
     async def start_chat_async(self):
         print("="*60)
@@ -577,10 +564,8 @@ class ChatAppWithPiper:
                                 llm_time = time.time() - llm_start
                                 
                                 thinking_task.cancel()
-                                try:
+                                with suppress(asyncio.CancelledError):
                                     await thinking_task
-                                except asyncio.CancelledError:
-                                    pass
                                 
                                 if response and self.controller:
                                     # Step 2: Add assistant response to history
@@ -590,18 +575,10 @@ class ChatAppWithPiper:
                                     tts_start = time.time()
                                     
                                     emotion, intensity, emotion_level = self.controller.analyze_emotion(response)
-                                    # Run speech/animation in thread to allow interrupt
-                                    speech_task = asyncio.create_task(
-                                        asyncio.to_thread(
-                                            self._speak_and_animate,
-                                            response, emotion, intensity, emotion_level
-                                        )
+                                    await self.controller.speak_with_expression_parallel(
+                                        response, emotion, intensity, emotion_level
                                     )
-                                    try:
-                                        await speech_task
-                                    except asyncio.CancelledError:
-                                        pass
-                                    
+                                     
                                     tts_time = time.time() - tts_start
                                     total_time = asr_time + llm_time + tts_time
                                     
@@ -649,10 +626,8 @@ class ChatAppWithPiper:
                                 llm_time = time.time() - llm_start
                                 
                                 thinking_task.cancel()
-                                try:
+                                with suppress(asyncio.CancelledError):
                                     await thinking_task
-                                except asyncio.CancelledError:
-                                    pass
                                 
                                 if response and self.controller:
                                     # Step 2: Add assistant response to history
@@ -662,18 +637,10 @@ class ChatAppWithPiper:
                                     tts_start = time.time()
                                     
                                     emotion, intensity, emotion_level = self.controller.analyze_emotion(response)
-                                    # Run speech/animation in thread to allow interrupt
-                                    speech_task = asyncio.create_task(
-                                        asyncio.to_thread(
-                                            self._speak_and_animate,
-                                            response, emotion, intensity, emotion_level
-                                        )
+                                    await self.controller.speak_with_expression_parallel(
+                                        response, emotion, intensity, emotion_level
                                     )
-                                    try:
-                                        await speech_task
-                                    except asyncio.CancelledError:
-                                        pass
-                                    
+                                     
                                     tts_time = time.time() - tts_start
                                     total_time = llm_time + tts_time
                                     
