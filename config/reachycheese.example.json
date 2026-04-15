@@ -1,0 +1,26 @@
+{
+  "preview_width": 640,
+  "preview_height": 480,
+  "preview_fps": 20.0,
+  "save_dir": "~/Pictures/ReachyMiniPhoto",
+  "wake_word": "reachy",
+  "asr_model": "base",
+  "vad_silence": 0.7,
+  "vad_aggressive": 1,
+  "piper_model": "models/en-us-blizzard_lessac-medium.onnx",
+  "piper_config": null,
+  "speaker": 0,
+  "camera_source": "reachy",
+  "camera_index": 0,
+  "email": {
+    "to": "",
+    "from": "",
+    "smtp_host": "smtp.gmail.com",
+    "smtp_port": 587,
+    "smtp_user": "",
+    "smtp_pass": "",
+    "smtp_encryption": "start-tls",
+    "subject": "Reachy camera photo",
+    "body": "Hi,\n\nAttached is the latest Reachy camera photo.\n\n- ReachyCheese"
+  }
+}

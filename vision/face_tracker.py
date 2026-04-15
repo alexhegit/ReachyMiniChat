@@ -38,6 +38,10 @@ class FaceTracker:
         # MediaPipe will be imported on first use to avoid startup overhead
         self._face_detection = None
         self._mp_drawing = None
+
+        # Fallback detector when mediapipe.solutions is unavailable in some builds
+        self._fallback_detector = None
+        self._using_fallback = False
         
         # Tracking state
         self._current_position: Optional[Tuple[int, int]] = None
@@ -53,22 +57,43 @@ class FaceTracker:
         self._last_frame_time: float = 0.0
         
     def _init_mediapipe(self):
-        """Lazy initialization of MediaPipe."""
-        if self._face_detection is None:
-            try:
-                import mediapipe as mp
-                print(f"      📦 Initializing MediaPipe FaceDetection (model={self.model_selection}, conf={self.min_detection_confidence})")
+        """Lazy initialization of MediaPipe.
+
+        Some newer/bundled mediapipe builds ship tasks-only APIs and do not
+        expose `mediapipe.solutions`. In that case, fall back to OpenCV
+        Haar cascade so tracking still works.
+        """
+        if self._face_detection is not None or self._fallback_detector is not None:
+            return
+
+        try:
+            import mediapipe as mp
+            has_solutions = hasattr(mp, "solutions") and hasattr(mp.solutions, "face_detection")
+            if has_solutions:
+                print(
+                    f"      📦 Initializing MediaPipe FaceDetection "
+                    f"(model={self.model_selection}, conf={self.min_detection_confidence})"
+                )
                 self._face_detection = mp.solutions.face_detection.FaceDetection(
                     model_selection=self.model_selection,
-                    min_detection_confidence=self.min_detection_confidence
+                    min_detection_confidence=self.min_detection_confidence,
                 )
-                self._mp_drawing = mp.solutions.drawing_utils
-                print(f"      ✅ MediaPipe initialized")
-            except ImportError as e:
-                raise ImportError(
-                    f"MediaPipe not installed: {e}. "
-                    "Run: pip install mediapipe"
-                )
+                self._mp_drawing = getattr(mp.solutions, "drawing_utils", None)
+                self._using_fallback = False
+                print("      ✅ MediaPipe initialized")
+                return
+            print("      ⚠️ mediapipe.solutions not available, switching to OpenCV Haar face detector")
+        except ImportError as e:
+            print(f"      ⚠️ MediaPipe import failed: {e}. Falling back to OpenCV Haar detector")
+
+        # Fallback path: OpenCV Haar cascade
+        cascade_path = cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
+        self._fallback_detector = cv2.CascadeClassifier(cascade_path)
+        if self._fallback_detector.empty():
+            raise RuntimeError(
+                "Failed to initialize fallback face detector (OpenCV Haar cascade)."
+            )
+        self._using_fallback = True
     
     def detect(self, frame) -> Optional[Tuple[int, int, int, int]]:
         """Detect face in frame and return bounding box.
@@ -95,6 +120,46 @@ class FaceTracker:
         rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         
         # Process frame (MediaPipe uses process(), not detect())
+        if self._using_fallback and self._fallback_detector is not None:
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            faces = self._fallback_detector.detectMultiScale(
+                gray,
+                scaleFactor=1.1,
+                minNeighbors=5,
+                minSize=(60, 60),
+            )
+            if len(faces) == 0:
+                return None
+            if len(faces) == 1:
+                x, y, fw, fh = faces[0]
+                return (int(x), int(y), int(fw), int(fh))
+
+            # Multiple faces: reuse strategy by adapting to a common shape
+            class _BBox:
+                def __init__(self, x0, y0, w0, h0):
+                    self.xmin = x0 / frame_w
+                    self.ymin = y0 / frame_h
+                    self.width = w0 / frame_w
+                    self.height = h0 / frame_h
+
+            class _Loc:
+                def __init__(self, bb):
+                    self.relative_bounding_box = bb
+
+            class _Det:
+                def __init__(self, x0, y0, w0, h0):
+                    self.location_data = _Loc(_BBox(x0, y0, w0, h0))
+
+            frame_h, frame_w = frame.shape[:2]
+            detections = [_Det(int(x), int(y), int(fw), int(fh)) for (x, y, fw, fh) in faces]
+            detection = self._select_face(detections, frame_w, frame_h)
+            bbox = detection.location_data.relative_bounding_box
+            x = int(bbox.xmin * frame_w)
+            y = int(bbox.ymin * frame_h)
+            width = int(bbox.width * frame_w)
+            height = int(bbox.height * frame_h)
+            return (x, y, width, height)
+
         results = self._face_detection.process(rgb_frame)
         
         if not results or not results.detections:

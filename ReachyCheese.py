@@ -13,14 +13,19 @@ from __future__ import annotations
 
 import argparse
 import difflib
+import json
 import os
 import queue
 import re
+import smtplib
+import ssl
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
+from email.message import EmailMessage
 from enum import Enum
+from mimetypes import guess_type
 from pathlib import Path
 from typing import Optional, Tuple
 
@@ -58,6 +63,84 @@ class RCState(str, Enum):
 
 
 @dataclass
+class EmailConfig:
+    recipient: str = ""
+    sender: str = ""
+    smtp_host: str = "smtp.gmail.com"
+    smtp_port: int = 587
+    smtp_username: str = ""
+    smtp_password: str = ""
+    smtp_encryption: str = "start-tls"  # start-tls | tls | none
+    subject: str = "Reachy camera photo"
+    body: str = "Hi,\n\nAttached is the latest Reachy camera photo.\n\n- ReachyCheese"
+
+    @property
+    def enabled(self) -> bool:
+        return bool(self.recipient.strip() and self.sender.strip() and self.smtp_password.strip())
+
+
+class PhotoEmailSender:
+    def __init__(self, cfg: EmailConfig):
+        self.cfg = cfg
+
+    @property
+    def enabled(self) -> bool:
+        return bool(self.cfg.sender.strip() and self.cfg.smtp_password.strip())
+
+    def send_photo(self, photo_path: Path, recipient_override: Optional[str] = None) -> Tuple[bool, Optional[str]]:
+        recipient = (recipient_override or self.cfg.recipient).strip()
+        if not self.enabled:
+            return False, "email sender is not enabled"
+        if not recipient:
+            return False, "recipient is empty"
+        if not photo_path.exists():
+            return False, f"photo not found: {photo_path}"
+
+        msg = EmailMessage()
+        msg["From"] = self.cfg.sender
+        msg["To"] = recipient
+        msg["Subject"] = self.cfg.subject
+        msg.set_content(self.cfg.body)
+
+        ctype, encoding = guess_type(str(photo_path))
+        if ctype is None or encoding is not None:
+            ctype = "application/octet-stream"
+        maintype, subtype = ctype.split("/", 1)
+
+        with open(photo_path, "rb") as f:
+            msg.add_attachment(
+                f.read(),
+                maintype=maintype,
+                subtype=subtype,
+                filename=photo_path.name,
+            )
+
+        username = self.cfg.smtp_username.strip() or self.cfg.sender.strip()
+        encryption = (self.cfg.smtp_encryption or "start-tls").strip().lower()
+        context = ssl.create_default_context()
+
+        try:
+            if encryption == "tls":
+                with smtplib.SMTP_SSL(self.cfg.smtp_host, self.cfg.smtp_port, timeout=30, context=context) as server:
+                    if self.cfg.smtp_password:
+                        server.login(username, self.cfg.smtp_password)
+                    server.send_message(msg)
+            else:
+                with smtplib.SMTP(self.cfg.smtp_host, self.cfg.smtp_port, timeout=30) as server:
+                    server.ehlo()
+                    if encryption == "start-tls":
+                        server.starttls(context=context)
+                        server.ehlo()
+                    if self.cfg.smtp_password:
+                        server.login(username, self.cfg.smtp_password)
+                    server.send_message(msg)
+        except Exception as exc:
+            return False, str(exc)
+
+        return True, None
+
+
+@dataclass
 class RCConfig:
     preview_width: int = 640
     preview_height: int = 480
@@ -68,12 +151,13 @@ class RCConfig:
     asr_model: str = "base"
     vad_silence: float = 0.7
     vad_aggressive: int = 1
-    piper_model: str = "models/en-us-ryan-medium.onnx"
+    piper_model: str = "models/en-us-blizzard_lessac-medium.onnx"
     piper_config: Optional[str] = None
     speaker_id: int = 0
     camera_source: str = "reachy"
     camera_index: int = 0
     debug: bool = False
+    email: EmailConfig = field(default_factory=EmailConfig)
 
 
 @dataclass
@@ -294,10 +378,10 @@ class FaceAligner:
 
         x, y, w, h = bbox
         frame_h, frame_w = frame.shape[:2]
-        min_face_area = int(frame_w * frame_h * 0.01)
-        if (w * h) < min_face_area:
-            self._stable_frames = 0
-            return FaceTrackStatus(False, False, None, None, 0.0, 0.0, 0)
+        # More permissive threshold so desktop-distance faces are still tracked.
+        # Keep area gating only for alignment/capture stability, not for drawing/tracking feedback.
+        min_face_area = int(frame_w * frame_h * 0.003)
+        face_too_small = (w * h) < min_face_area
 
         cx, cy = x + (w // 2), y + (h // 2)
         dx = float(cx - frame_w // 2)
@@ -306,7 +390,7 @@ class FaceAligner:
         self._ema_dx = self._alpha * dx + (1 - self._alpha) * self._ema_dx
         self._ema_dy = self._alpha * dy + (1 - self._alpha) * self._ema_dy
 
-        aligned_now = abs(self._ema_dx) <= self._deadzone_x and abs(self._ema_dy) <= self._deadzone_y
+        aligned_now = (not face_too_small) and abs(self._ema_dx) <= self._deadzone_x and abs(self._ema_dy) <= self._deadzone_y
         self._stable_frames = self._stable_frames + 1 if aligned_now else 0
         aligned = self._stable_frames >= self._stable_needed
 
@@ -579,6 +663,8 @@ class ReachyCheeseApp:
         self._hint = "Say 'Reachy' to wake"
         self._last_saved_path = ""
         self._armed_since = 0.0
+        self._email_sender = PhotoEmailSender(cfg.email)
+        self._pending_email_recipient: Optional[str] = None
 
         self._countdown_started_at = 0.0
         self._countdown_index = 0
@@ -590,6 +676,96 @@ class ReachyCheeseApp:
             (3.2, "Cheese"),
         ]
         self._countdown_overlay = ""
+
+    @staticmethod
+    def parse_email_recipient_input(text: str) -> Optional[str]:
+        t = (text or "").strip()
+        if not t:
+            return None
+        if t.lower() in {"skip", "none", "no", "n"}:
+            return None
+        # Simple practical email validation
+        if re.fullmatch(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}", t):
+            return t
+        return None
+
+    def _prompt_email_recipient(self) -> Optional[str]:
+        # If sender is not configured, skip prompt entirely.
+        if not self._email_sender.enabled:
+            return None
+
+        default_recipient = (self.cfg.email.recipient or "").strip()
+
+        # GUI-first prompt: try a small modal input box so user can type per shot.
+        try:
+            import tkinter as tk
+            from tkinter import simpledialog, messagebox
+
+            root = tk.Tk()
+            root.withdraw()
+            try:
+                root.attributes("-topmost", True)
+            except Exception:
+                pass
+
+            prompt = (
+                "Enter recipient email for this photo.\n"
+                "Type 'skip' to save locally only."
+            )
+            raw = simpledialog.askstring(
+                "ReachyCheese Email",
+                prompt,
+                initialvalue=default_recipient,
+                parent=root,
+            )
+
+            # Dialog closed/cancelled -> treat as skip local save.
+            if raw is None:
+                return None
+
+            raw = (raw or "").strip()
+            if not raw:
+                return default_recipient or None
+
+            parsed = self.parse_email_recipient_input(raw)
+            if parsed is None and raw.lower() not in {"skip", "none", "no", "n", ""}:
+                try:
+                    messagebox.showwarning(
+                        "Invalid email",
+                        "Email format looks invalid. This capture will save locally only.",
+                        parent=root,
+                    )
+                except Exception:
+                    pass
+                return None
+            return parsed
+        except Exception:
+            # Fallback for headless/no-tk environments: terminal prompt.
+            if default_recipient:
+                prompt = (
+                    f"📧 Enter recipient email for this photo "
+                    f"(Enter=use {default_recipient}, type 'skip' to local-save only): "
+                )
+            else:
+                prompt = "📧 Enter recipient email for this photo (or type 'skip' for local-save only): "
+
+            try:
+                raw = input(prompt)
+            except EOFError:
+                return default_recipient or None
+
+            raw = (raw or "").strip()
+            if not raw:
+                return default_recipient or None
+
+            parsed = self.parse_email_recipient_input(raw)
+            if parsed is None and raw.lower() not in {"skip", "none", "no", "n", ""}:
+                print("⚠️ Invalid email format. This capture will save locally only.")
+                return None
+            return parsed
+
+    def _run_email_prompt_once(self) -> None:
+        self._pending_email_recipient = self._prompt_email_recipient()
 
     @staticmethod
     def _is_capture_phrase(text: str) -> bool:
@@ -670,6 +846,8 @@ class ReachyCheeseApp:
         self._hint = "Tracking largest face..."
 
     def _start_countdown(self) -> None:
+        # Prompt recipient right before capture cycle so user can change per-person.
+        self._run_email_prompt_once()
         self.state = RCState.COUNTDOWN
         self._countdown_started_at = time.time()
         self._countdown_index = 0
@@ -688,7 +866,20 @@ class ReachyCheeseApp:
         if ok:
             self._last_saved_path = str(out_path)
             print(f"📸 Saved: {out_path}")
-            self.voice.speak_async("Photo saved.")
+            email_msg = ""
+            recipient = self._pending_email_recipient
+            if self._email_sender.enabled and recipient:
+                sent, err = self._email_sender.send_photo(out_path, recipient_override=recipient)
+                if sent:
+                    print(f"✉️ Email sent: {recipient}")
+                    email_msg = " and emailed"
+                else:
+                    print(f"⚠️ Email send failed: {err}")
+                    email_msg = ". Email failed"
+            elif self._email_sender.enabled and not recipient:
+                print("📭 Email skipped for this capture")
+            self._pending_email_recipient = None
+            self.voice.speak_async(f"Photo saved{email_msg}.")
             self._enter_sleep()
         else:
             print("❌ Failed to save photo")
@@ -845,39 +1036,132 @@ class ReachyCheeseApp:
             self.gui.close()
 
 
-def parse_args() -> RCConfig:
+def _load_json_config(config_path: Optional[str]) -> dict:
+    if not config_path:
+        return {}
+    p = Path(os.path.expanduser(config_path))
+    if not p.exists():
+        raise FileNotFoundError(f"Config file not found: {p}")
+    with open(p, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    if not isinstance(data, dict):
+        raise ValueError("Config file root must be a JSON object")
+    return data
+
+
+def _cfg_value(cli_value, config_dict: dict, key: str):
+    # argparse uses None for absent optional args when default=None;
+    # for booleans with store_true/store_false we avoid this helper.
+    if cli_value is not None:
+        return cli_value
+    return config_dict.get(key)
+
+
+def parse_args(argv: Optional[list[str]] = None) -> RCConfig:
     parser = argparse.ArgumentParser(description="ReachyCheese offline voice photo app")
-    parser.add_argument("--preview-width", type=int, default=640)
-    parser.add_argument("--preview-height", type=int, default=480)
-    parser.add_argument("--preview-fps", type=float, default=20.0)
-    parser.add_argument("--save-dir", default=str(Path.home() / "Pictures" / "ReachyMiniPhoto"))
-    parser.add_argument("--wake-word", default="reachy")
-    parser.add_argument("--asr-model", default="base", choices=["tiny", "base", "small", "medium", "large"])
-    parser.add_argument("--vad-silence", type=float, default=0.7)
-    parser.add_argument("--vad-aggressive", type=int, default=1, choices=[0, 1, 2, 3])
-    parser.add_argument("--piper-model", default="models/en-us-ryan-medium.onnx")
+    parser.add_argument("--config", default=None, help="Path to JSON config file")
+    parser.add_argument("--preview-width", type=int, default=None)
+    parser.add_argument("--preview-height", type=int, default=None)
+    parser.add_argument("--preview-fps", type=float, default=None)
+    parser.add_argument("--save-dir", default=None)
+    parser.add_argument("--wake-word", default=None)
+    parser.add_argument("--asr-model", default=None, choices=["tiny", "base", "small", "medium", "large"])
+    parser.add_argument("--vad-silence", type=float, default=None)
+    parser.add_argument("--vad-aggressive", type=int, default=None, choices=[0, 1, 2, 3])
+    parser.add_argument("--piper-model", default=None)
     parser.add_argument("--piper-config", default=None)
-    parser.add_argument("--speaker", type=int, default=0)
-    parser.add_argument("--camera-source", default="reachy", choices=["reachy", "webcam"])
-    parser.add_argument("--camera-index", type=int, default=0)
+    parser.add_argument("--speaker", type=int, default=None)
+    parser.add_argument("--camera-source", default=None, choices=["reachy", "webcam"])
+    parser.add_argument("--camera-index", type=int, default=None)
     parser.add_argument("--debug", action="store_true")
-    args = parser.parse_args()
+
+    # Optional SMTP email delivery after successful capture
+    parser.add_argument("--email-to", default=None)
+    parser.add_argument("--email-from", default=None)
+    parser.add_argument("--smtp-host", default=None)
+    parser.add_argument("--smtp-port", type=int, default=None)
+    parser.add_argument("--smtp-user", default=None)
+    parser.add_argument("--smtp-pass", default=None)
+    parser.add_argument("--smtp-encryption", default=None, choices=["start-tls", "tls", "none"])
+    parser.add_argument("--email-subject", default=None)
+    parser.add_argument("--email-body", default=None)
+
+    args = parser.parse_args(argv)
+    file_cfg = _load_json_config(args.config)
+    email_cfg = file_cfg.get("email", {}) if isinstance(file_cfg.get("email", {}), dict) else {}
+
+    preview_width = _cfg_value(args.preview_width, file_cfg, "preview_width") or 640
+    preview_height = _cfg_value(args.preview_height, file_cfg, "preview_height") or 480
+    preview_fps = _cfg_value(args.preview_fps, file_cfg, "preview_fps") or 20.0
+    save_dir = _cfg_value(args.save_dir, file_cfg, "save_dir") or str(Path.home() / "Pictures" / "ReachyMiniPhoto")
+    wake_word = (_cfg_value(args.wake_word, file_cfg, "wake_word") or "reachy").strip().lower()
+    asr_model = _cfg_value(args.asr_model, file_cfg, "asr_model") or "base"
+    vad_silence = _cfg_value(args.vad_silence, file_cfg, "vad_silence")
+    vad_silence = 0.7 if vad_silence is None else float(vad_silence)
+    vad_aggressive = _cfg_value(args.vad_aggressive, file_cfg, "vad_aggressive")
+    vad_aggressive = 1 if vad_aggressive is None else int(vad_aggressive)
+    piper_model = _cfg_value(args.piper_model, file_cfg, "piper_model") or "models/en-us-blizzard_lessac-medium.onnx"
+    piper_config = _cfg_value(args.piper_config, file_cfg, "piper_config")
+    speaker = _cfg_value(args.speaker, file_cfg, "speaker")
+    speaker = 0 if speaker is None else int(speaker)
+    camera_source = _cfg_value(args.camera_source, file_cfg, "camera_source") or "reachy"
+    camera_index = _cfg_value(args.camera_index, file_cfg, "camera_index")
+    camera_index = 0 if camera_index is None else int(camera_index)
+
+    email_to = _cfg_value(args.email_to, email_cfg, "to")
+    if email_to is None:
+        email_to = os.environ.get("REACHY_EMAIL_TO", "")
+    email_from = _cfg_value(args.email_from, email_cfg, "from")
+    if email_from is None:
+        email_from = os.environ.get("REACHY_EMAIL_FROM", "")
+    smtp_host = _cfg_value(args.smtp_host, email_cfg, "smtp_host")
+    if smtp_host is None:
+        smtp_host = os.environ.get("REACHY_SMTP_HOST", "smtp.gmail.com")
+    smtp_port = _cfg_value(args.smtp_port, email_cfg, "smtp_port")
+    if smtp_port is None:
+        smtp_port = int(os.environ.get("REACHY_SMTP_PORT", "587"))
+    smtp_user = _cfg_value(args.smtp_user, email_cfg, "smtp_user")
+    if smtp_user is None:
+        smtp_user = os.environ.get("REACHY_SMTP_USER", "")
+    smtp_pass = _cfg_value(args.smtp_pass, email_cfg, "smtp_pass")
+    if smtp_pass is None:
+        smtp_pass = os.environ.get("REACHY_SMTP_PASS", "")
+    smtp_encryption = _cfg_value(args.smtp_encryption, email_cfg, "smtp_encryption")
+    if smtp_encryption is None:
+        smtp_encryption = os.environ.get("REACHY_SMTP_ENCRYPTION", "start-tls")
+    email_subject = _cfg_value(args.email_subject, email_cfg, "subject")
+    if email_subject is None:
+        email_subject = os.environ.get("REACHY_EMAIL_SUBJECT", "Reachy camera photo")
+    email_body = _cfg_value(args.email_body, email_cfg, "body")
+    if email_body is None:
+        email_body = os.environ.get("REACHY_EMAIL_BODY", "Hi,\n\nAttached is the latest Reachy camera photo.\n\n- ReachyCheese")
 
     return RCConfig(
-        preview_width=args.preview_width,
-        preview_height=args.preview_height,
-        preview_fps=args.preview_fps,
-        save_dir=Path(os.path.expanduser(args.save_dir)),
-        wake_word=args.wake_word.strip().lower(),
-        asr_model=args.asr_model,
-        vad_silence=args.vad_silence,
-        vad_aggressive=args.vad_aggressive,
-        piper_model=args.piper_model,
-        piper_config=args.piper_config,
-        speaker_id=args.speaker,
-        camera_source=args.camera_source,
-        camera_index=args.camera_index,
-        debug=args.debug,
+        preview_width=int(preview_width),
+        preview_height=int(preview_height),
+        preview_fps=float(preview_fps),
+        save_dir=Path(os.path.expanduser(save_dir)),
+        wake_word=wake_word,
+        asr_model=asr_model,
+        vad_silence=vad_silence,
+        vad_aggressive=vad_aggressive,
+        piper_model=piper_model,
+        piper_config=piper_config,
+        speaker_id=speaker,
+        camera_source=camera_source,
+        camera_index=camera_index,
+        debug=bool(args.debug),
+        email=EmailConfig(
+            recipient=str(email_to or ""),
+            sender=str(email_from or ""),
+            smtp_host=str(smtp_host),
+            smtp_port=int(smtp_port),
+            smtp_username=str(smtp_user or ""),
+            smtp_password=str(smtp_pass or ""),
+            smtp_encryption=str(smtp_encryption),
+            subject=str(email_subject),
+            body=str(email_body),
+        ),
     )
 
 
