@@ -45,11 +45,6 @@ from vision.face_tracker import FaceTracker
 from utils.asr import FasterWhisperASREngine
 
 try:
-    from dearpygui import dearpygui as dpg
-except Exception:  # pragma: no cover - optional runtime dependency
-    dpg = None
-
-try:
     from emo_v9 import PiperTTSEngine
 except Exception:  # pragma: no cover - optional runtime dependency
     PiperTTSEngine = None  # type: ignore[assignment]
@@ -333,11 +328,13 @@ class FaceAligner:
             min_detection_confidence=0.70,
         )
         self._deadzone_x = 25
-        self._deadzone_y = 20
+        # Vertical axis tuned a bit tighter than horizontal so faces don't sit
+        # persistently below the center cross.
+        self._deadzone_y = 14
         self._lock_hold_x = 35
-        self._lock_hold_y = 28
+        self._lock_hold_y = 20
         self._release_x = 45
-        self._release_y = 35
+        self._release_y = 24
         self._stable_needed = 10
         self._stable_frames = 0
         self._ema_dx = 0.0
@@ -353,7 +350,7 @@ class FaceAligner:
         self._reacquire_x = 170
         self._reacquire_y = 130
         self._cmd_max_step_x = 95
-        self._cmd_max_step_y = 70
+        self._cmd_max_step_y = 85
         self._settle_until = 0.0
         self._body_cooldown_until = 0.0
 
@@ -424,7 +421,10 @@ class FaceAligner:
                 if self._big_error_since == 0.0:
                     self._big_error_since = now
                 elif now - self._big_error_since > (0.5 if in_reacquire else 0.7):
-                    step = 0.09 if self._ema_dx > 0 else -0.09
+                    # body_yaw sign should follow camera pixel convention from look_at_image:
+                    # when face is on the right (dx > 0), head yaw goes negative to track it,
+                    # so body compensation must also move in the negative direction.
+                    step = -0.09 if self._ema_dx > 0 else 0.09
                     self._body_yaw = max(-self._max_body_yaw, min(self._max_body_yaw, self._body_yaw + step))
                     try:
                         runtime.goto_body_yaw(self._body_yaw, duration=0.42)
@@ -441,7 +441,7 @@ class FaceAligner:
 
             if need_move and not self._locked and not did_body_move:
                 target_x = frame_w // 2 + int(np.clip(self._ema_dx * 0.55, -self._cmd_max_step_x, self._cmd_max_step_x))
-                target_y = frame_h // 2 + int(np.clip(self._ema_dy * 0.50, -self._cmd_max_step_y, self._cmd_max_step_y))
+                target_y = frame_h // 2 + int(np.clip(self._ema_dy * 0.62, -self._cmd_max_step_y, self._cmd_max_step_y))
                 should_send = True
                 if self._last_cmd_center:
                     dcmd_x = abs(target_x - self._last_cmd_center[0])
@@ -474,7 +474,6 @@ class PreviewGUI:
         self.cfg = cfg
         self._events = event_queue
         self._ready = True
-        self._backend = "dpg" if dpg is not None else "cv2"
         self._window_name = "ReachyCheese"
         self._button_height = 44
         self._buttons = [
@@ -483,40 +482,6 @@ class PreviewGUI:
             ("Cancel", "manual_cancel"),
             ("Sleep", "manual_sleep"),
         ]
-
-        self._texture_tag = "preview_texture"
-        self._status_tag = "status_text"
-        self._hint_tag = "hint_text"
-        self._face_tag = "face_text"
-        self._save_tag = "save_text"
-        self._frame_rgb = np.zeros((cfg.preview_height, cfg.preview_width, 3), dtype=np.float32)
-
-        if self._backend == "dpg":
-            dpg.create_context()
-            with dpg.texture_registry():
-                dpg.add_raw_texture(
-                    width=cfg.preview_width,
-                    height=cfg.preview_height,
-                    default_value=self._frame_rgb.flatten(),
-                    format=dpg.mvFormat_Float_rgb,
-                    tag=self._texture_tag,
-                )
-            with dpg.window(label="ReachyCheese", width=cfg.preview_width + 28, height=cfg.preview_height + 220):
-                dpg.add_image(self._texture_tag)
-                dpg.add_text("State: SLEEP", tag=self._status_tag)
-                dpg.add_text("Say 'Reachy' to wake", tag=self._hint_tag)
-                dpg.add_text("Face: --", tag=self._face_tag)
-                dpg.add_text("Last saved: --", tag=self._save_tag)
-                with dpg.group(horizontal=True):
-                    dpg.add_button(label="Wake", callback=lambda: self._events.put("manual_wake"))
-                    dpg.add_button(label="Take Photo", callback=lambda: self._events.put("manual_capture"))
-                    dpg.add_button(label="Cancel", callback=lambda: self._events.put("manual_cancel"))
-                    dpg.add_button(label="Sleep", callback=lambda: self._events.put("manual_sleep"))
-
-            dpg.create_viewport(title="ReachyCheese", width=cfg.preview_width + 32, height=cfg.preview_height + 250)
-            dpg.setup_dearpygui()
-            dpg.show_viewport()
-            return
 
         cv2.namedWindow(self._window_name, cv2.WINDOW_NORMAL)
         cv2.resizeWindow(self._window_name, cfg.preview_width, cfg.preview_height + self._button_height + 60)
@@ -529,19 +494,14 @@ class PreviewGUI:
     def is_running(self) -> bool:
         if not self._ready:
             return False
-        if self._backend == "dpg":
-            return dpg.is_dearpygui_running()
         visible = cv2.getWindowProperty(self._window_name, cv2.WND_PROP_VISIBLE)
         return visible >= 1
 
     def close(self) -> None:
-        if self._backend == "dpg" and self._ready:
-            dpg.destroy_context()
-        if self._backend == "cv2":
-            try:
-                cv2.destroyWindow(self._window_name)
-            except Exception:
-                pass
+        try:
+            cv2.destroyWindow(self._window_name)
+        except Exception:
+            pass
         self._ready = False
 
     def _on_mouse(self, event, x, y, flags, param) -> None:
@@ -603,19 +563,6 @@ class PreviewGUI:
                 (20, 20, 240),
                 3,
             )
-
-        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB).astype(np.float32) / 255.0
-        if self._backend == "dpg":
-            dpg.set_value(self._texture_tag, rgb.flatten())
-            dpg.set_value(self._status_tag, f"State: {state.value.upper()}")
-            dpg.set_value(self._hint_tag, hint)
-            if status and status.has_face:
-                dpg.set_value(self._face_tag, f"Face: stable={status.stable_frames}, aligned={status.aligned}")
-            else:
-                dpg.set_value(self._face_tag, "Face: not detected")
-            dpg.set_value(self._save_tag, f"Last saved: {last_saved or '--'}")
-            dpg.render_dearpygui_frame()
-            return
 
         panel_h = self._button_height + 60
         canvas = np.zeros((self.cfg.preview_height + panel_h, self.cfg.preview_width, 3), dtype=np.uint8)
