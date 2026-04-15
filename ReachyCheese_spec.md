@@ -76,14 +76,40 @@
 - 倒计时期间丢脸或偏差过大：取消倒计时，回 `Tracking/Armed`。
 - 保存失败：明确提示，不静默失败。
 
-## 10. 架构方向（独立 App）
+## 11. 可选邮件发送（按次收件人）
 
-- 优先使用更精简的组件化架构，避免继续扩展 `emo_v*` 单文件结构。
-- 推荐模块边界：
-  - `state_machine`
-  - `vision_tracker`
-  - `voice_io`（wake/asr/tts）
-  - `camera_preview_gui`
-  - `photo_storage`
-  - `reachy_controller`
-- 先完成 MVP 主链路，再迭代细化。
+- 拍照成功后可选发送邮件附件。
+- 每次拍照会提示输入收件人：
+  - 输入合法邮箱：本次发送到该邮箱
+  - 输入 `skip`：本次仅本地保存，不发送
+  - 空输入：若已配置默认 `email.to` 则用默认收件人
+- 邮件发送失败不会影响本地照片保存成功。
+
+## 12. 配置文件与参数优先级
+
+- 支持 `--config <json>` 加载配置。
+- 示例：`config/reachycheese.example.json`
+- 无密码模板：`config/reachycheese.no-password.template.json`
+- 建议本地私有：`config/reachycheese.local.json`（不提交）
+
+优先级：**CLI 参数 > 配置文件 > 环境变量 > 代码默认值**
+
+关键环境变量：
+- `REACHY_EMAIL_TO`
+- `REACHY_EMAIL_FROM`
+- `REACHY_SMTP_HOST`
+- `REACHY_SMTP_PORT`
+- `REACHY_SMTP_USER`
+- `REACHY_SMTP_PASS`
+- `REACHY_SMTP_ENCRYPTION`
+- `REACHY_EMAIL_SUBJECT`
+- `REACHY_EMAIL_BODY`
+
+> 安全建议：不要在配置文件中写 SMTP 密码，优先使用 `REACHY_SMTP_PASS`。
+
+## 13. 便捷启动与烟测
+
+- 启动脚本：`scripts/run_reachycheese.sh`
+- 烟测脚本：`scripts/ci_smoke.sh`
+  - `--json` 输出 JSON 到 stdout
+  - `--json-out <path>` 写入 JSON 报告文件

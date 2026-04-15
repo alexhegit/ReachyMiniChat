@@ -129,5 +129,59 @@ python emo_v8.py --piper-model ./models/zh_CN-huayan-medium.onnx --gentle --mode
 python emo_v8.py --piper-model models/en-us-blizzard_lessac-medium.onnx --piper-config models/en-us-blizzard_lessac-medium.onnx.json --speaker 0
 ```
 
+## ReachyCheese（分支：`ReachyCheese`）
+
+ReachyCheese 是当前主线的离线语音拍照应用，支持：
+- 人脸跟踪 + 对齐拍照
+- 拍照后可选邮件发送（按次输入收件人，支持 `skip` 仅本地保存）
+- JSON 配置文件启动（减少长参数输入）
+
+### 运行方式
+
+推荐脚本启动：
+
+```bash
+./scripts/run_reachycheese.sh
+```
+
+或指定配置文件：
+
+```bash
+./scripts/run_reachycheese.sh ./config/reachycheese.example.json
+```
+
+### 配置文件
+
+- 示例配置：`config/reachycheese.example.json`
+- 无密码模板：`config/reachycheese.no-password.template.json`
+- 本地私有配置建议：`config/reachycheese.local.json`（已在 `.gitignore` 忽略，不提交）
+
+### 邮件配置建议（安全）
+
+不要把 SMTP 密码写入配置文件，推荐通过环境变量提供：
+
+```bash
+export REACHY_SMTP_PASS='your-app-password'
+```
+
+常用变量：
+- `REACHY_EMAIL_TO`
+- `REACHY_EMAIL_FROM`
+- `REACHY_SMTP_HOST`
+- `REACHY_SMTP_PORT`
+- `REACHY_SMTP_USER`
+- `REACHY_SMTP_PASS`
+- `REACHY_SMTP_ENCRYPTION`
+- `REACHY_EMAIL_SUBJECT`
+- `REACHY_EMAIL_BODY`
+
+### 自动化烟测
+
+```bash
+./scripts/ci_smoke.sh
+./scripts/ci_smoke.sh --json
+./scripts/ci_smoke.sh --json-out /tmp/reachycheese_smoke_report.json
+```
+
 ## Version History
 - See [EMO_README.md](EMO_README.md) for version details and changelog across `emo_v*` versions.
