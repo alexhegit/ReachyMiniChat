@@ -50,3 +50,6 @@ ENV/
 # Model files (large binaries)
 models/*.onnx
 models/*.onnx.json
+
+# Local ReachyCheese runtime config (contains personal SMTP/account info)
+config/reachycheese.local.json
