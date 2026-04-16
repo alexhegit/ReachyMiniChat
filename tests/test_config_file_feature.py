@@ -15,6 +15,7 @@ class ConfigFileFeatureTests(unittest.TestCase):
                     {
                         "camera_source": "webcam",
                         "camera_index": 2,
+                        "controller": "v1",
                         "preview_width": 800,
                         "email": {
                             "to": "person@example.com",
@@ -32,6 +33,7 @@ class ConfigFileFeatureTests(unittest.TestCase):
 
             self.assertEqual(cfg.camera_source, "webcam")
             self.assertEqual(cfg.camera_index, 2)
+            self.assertEqual(cfg.controller, "v1")
             self.assertEqual(cfg.preview_width, 800)
             self.assertEqual(cfg.email.recipient, "person@example.com")
             self.assertEqual(cfg.email.sender, "robot@example.com")
@@ -47,6 +49,7 @@ class ConfigFileFeatureTests(unittest.TestCase):
                     {
                         "camera_source": "webcam",
                         "camera_index": 2,
+                        "controller": "v1",
                         "email": {"to": "person@example.com"},
                     }
                 ),
@@ -61,6 +64,8 @@ class ConfigFileFeatureTests(unittest.TestCase):
                     "reachy",
                     "--camera-index",
                     "0",
+                    "--controller",
+                    "v2",
                     "--email-to",
                     "override@example.com",
                 ]
@@ -68,6 +73,7 @@ class ConfigFileFeatureTests(unittest.TestCase):
 
             self.assertEqual(cfg.camera_source, "reachy")
             self.assertEqual(cfg.camera_index, 0)
+            self.assertEqual(cfg.controller, "v2")
             self.assertEqual(cfg.email.recipient, "override@example.com")
 
 
