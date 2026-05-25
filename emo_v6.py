@@ -591,23 +591,36 @@ class EmotionControllerV6:
         lib = self.emotions_lib if lib_tag == 'emotions' else self.dances_lib
         return lib.get(move_name)
 
-    def execute_recorded_move(self, move, initial_goto_duration: float = 1.0):
-        """Execute a recorded move. `move` can be (lib_tag, move_name) or a move_name string."""
+    def _resolve_recorded_move(self, move):
+        """Return a recorded Move object. `move` can be (lib_tag, move_name) or a move_name string."""
         if isinstance(move, tuple) and len(move) == 2:
             lib_tag, move_name = move
             if self.debug:
                 print(f"🎬 Playing {lib_tag}/{move_name}")
-            mv = self._get_move(lib_tag, move_name)
+            return self._get_move(lib_tag, move_name)
         else:
             move_name = move
             if self.debug:
                 print(f"🎬 Playing recorded move: {move_name}")
             # Try dances library first, fall back to emotions
             try:
-                mv = self.dances_lib.get(move_name)
+                return self.dances_lib.get(move_name)
             except Exception:
-                mv = self.emotions_lib.get(move_name)
+                return self.emotions_lib.get(move_name)
+
+    def execute_recorded_move(self, move, initial_goto_duration: float = 1.0):
+        """Execute a recorded move. `move` can be (lib_tag, move_name) or a move_name string."""
+        mv = self._resolve_recorded_move(move)
         self.reachy.play_move(mv, initial_goto_duration=initial_goto_duration)
+
+    async def execute_recorded_move_async(self, move, initial_goto_duration: float = 1.0):
+        """Execute a recorded move from an async context without using async_to_sync."""
+        import asyncio
+        mv = self._resolve_recorded_move(move)
+        if hasattr(self.reachy, 'async_play_move'):
+            await self.reachy.async_play_move(mv, initial_goto_duration=initial_goto_duration)
+        else:
+            await asyncio.to_thread(self.reachy.play_move, mv, initial_goto_duration=initial_goto_duration)
 
     def _filter_gentle_emotions(self, available_moves):
         """Filter to only gentle emotions if gentle_mode is enabled."""
@@ -805,7 +818,7 @@ class EmotionControllerV6:
                 import random
                 move_name = random.choice(available_moves)
                 duration_map = {'high': 0.8, 'medium': 1.0, 'low': 1.2}
-                self.execute_recorded_move(move_name, duration_map.get(intensity, 1.0))
+                await self.execute_recorded_move_async(move_name, duration_map.get(intensity, 1.0))
         except Exception as e:
             if self.debug:
                 print(f"⚠️ Quick move execution error: {e}")
@@ -831,7 +844,7 @@ class EmotionControllerV6:
             if available_moves:
                 import random
                 move_name = random.choice(available_moves)
-                self.execute_recorded_move(move_name, 0.8)  # Quick final movement
+                await self.execute_recorded_move_async(move_name, 0.8)  # Quick final movement
         except Exception:
             pass
 
